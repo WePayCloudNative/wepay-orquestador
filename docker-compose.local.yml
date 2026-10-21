@@ -1,0 +1,114 @@
+# ============================================================
+# Prueba LOCAL antes de AWS - construye desde el código de cada repo
+# Uso (desde esta carpeta):
+#   docker compose -f docker-compose.local.yml --env-file .env up -d --build
+# Requiere los repos como carpetas hermanas en ..\ (cloude\wepay-bff, etc.)
+# Base de datos: H2 en memoria (Oracle se agrega después)
+# ============================================================
+
+x-java: &java
+  restart: unless-stopped
+  mem_limit: 512m
+  networks: [wepay-net]
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+    ports:
+      - "15672:15672"   # panel web
+    volumes:
+      - rabbit_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [wepay-net]
+
+  ms-clientes:
+    <<: *java
+    build: ../ms-clientes
+    container_name: ms-clientes
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+      APP_ADMIN_OID: ${APP_ADMIN_OID}
+
+  ms-catalogo:
+    <<: *java
+    build: ../wepay-catalogo
+    container_name: ms-catalogo
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+
+  ms-pedidos:
+    <<: *java
+    build: ../wepay-ms-pedidos
+    container_name: ms-pedidos
+    ports:
+      - "8085:8085"     # solo para probar con los scripts del zip
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  ms-notificaciones:
+    <<: *java
+    build: ../wepay-ms-notificaciones
+    container_name: ms-notificaciones
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  api-bff:
+    <<: *java
+    build: ../wepay-bff
+    container_name: api-bff
+    ports:
+      - "8081:8081"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m -Djava.net.preferIPv4Stack=true"
+      ENTRA_ISSUER_URI: ${ENTRA_ISSUER_URI}
+      ENTRA_API_CLIENT_ID: ${ENTRA_API_CLIENT_ID}
+      MS_USUARIOS_URL: http://ms-clientes:8083
+      MS_PRODUCTOS_URL: http://ms-catalogo:8084
+      MS_PEDIDOS_URL: http://ms-pedidos:8085
+    depends_on:
+      - ms-clientes
+      - ms-catalogo
+      - ms-pedidos
+
+  front:
+    build: ../wepay-front
+    container_name: wepay-front
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    environment:
+      VITE_ENTRA_TENANT_ID: ${VITE_ENTRA_TENANT_ID}
+      VITE_SPA_CLIENT_ID: ${VITE_SPA_CLIENT_ID}
+      VITE_API_CLIENT_ID: ${VITE_API_CLIENT_ID}
+      VITE_BFF_BASE_URL: http://localhost:8081
+    depends_on:
+      - api-bff
+    networks: [wepay-net]
+
+volumes:
+  rabbit_data:
+
+networks:
+  wepay-net:
+    driver: bridge
