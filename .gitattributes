@@ -1,0 +1,4 @@
+# Scripts y configs que se copian a las EC2 (Linux) deben quedar con LF
+*.sh text eol=lf
+rabbitmq/enabled_plugins text eol=lf
+*.yml text eol=lf

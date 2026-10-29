@@ -15,14 +15,41 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: rabbitmq
+    hostname: rabbitmq
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+      RABBITMQ_ERLANG_COOKIE: ${RABBIT_COOKIE}
     ports:
       - "15672:15672"   # panel web
     volumes:
       - rabbit_data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # shovel para "Move messages" desde DLQ
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [wepay-net]
+
+    # RabbitMQ 2: segundo nodo del clúster
+  rabbitmq2:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq2
+    hostname: rabbitmq2
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+      RABBITMQ_ERLANG_COOKIE: ${RABBIT_COOKIE}
+    ports:
+      - "15673:15672"   # panel web del Rabbit 2
+    volumes:
+      - rabbit2_data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -53,11 +80,13 @@ services:
       - "8085:8085"     # solo para probar con los scripts del zip
     environment:
       JAVA_TOOL_OPTIONS: "-Xmx320m"
-      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_ADDRESSES: rabbitmq:5672,rabbitmq2:5672
       SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
       SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      rabbitmq2:
         condition: service_healthy
 
   ms-notificaciones:
@@ -66,11 +95,14 @@ services:
     container_name: ms-notificaciones
     environment:
       JAVA_TOOL_OPTIONS: "-Xmx256m"
-      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_ADDRESSES: rabbitmq:5672,rabbitmq2:5672
       SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
       SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+      APP_FALLA_FACTURACION: ${APP_FALLA_FACTURACION:-false}   # true = simula caída de facturación
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      rabbitmq2:
         condition: service_healthy
 
   api-bff:
@@ -108,6 +140,7 @@ services:
 
 volumes:
   rabbit_data:
+  rabbit2_data:
 
 networks:
   wepay-net:
