@@ -1,181 +1,117 @@
-version: '3.8'
+# ============================================================
+# Microservicios WePay, tal como corren en la EC2 "ec2-microservicios".
+# Requiere el clúster Kafka (docker-compose.kafka-cluster.yml) en la misma red,
+# el clúster RabbitMQ (RABBIT_ADDRESSES) y Oracle en RDS (ORACLE_URL).
+#
+# Uso: docker compose up -d
+#
+# Solo el BFF publica un puerto (8081, para API Gateway). El resto escucha en la
+# red Docker o en 127.0.0.1 (solo desde la misma máquina, para pruebas con curl).
+# ============================================================
+
+x-java: &java
+  restart: unless-stopped
+  mem_limit: 512m
+  networks: [wepay-net]
+
+x-kafka: &kafka-bootstrap kafka:29092,kafka2:29092,kafka3:29092
 
 services:
-  # ==========================================
-  # 1. BASES DE DATOS
-  # ==========================================
-  oracle-db:
-    image: gvenzl/oracle-xe:21-slim
-    container_name: oracle-db
-    environment:
-      - ORACLE_PASSWORD=oracle
-    ports:
-      - "1521:1521"
-    networks:
-      - wepay-net
-
-  # ==========================================
-  # 2. INFRAESTRUCTURA RABBITMQ (1 Nodo Ligero)
-  # ==========================================
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: rabbitmq
-    hostname: rabbitmq
-    environment:
-      - RABBITMQ_DEFAULT_USER=admin
-      - RABBITMQ_DEFAULT_PASS=admin
-    ports:
-      - "15672:15672" # Management UI
-      - "5672:5672"   # AMQP
-    networks:
-      - wepay-net
-
-  # ==========================================
-  # 3. INFRAESTRUCTURA KAFKA (1 ZK + 1 Broker Ligero)
-  # ==========================================
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.9.11
-    container_name: zookeeper
-    hostname: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
-    networks:
-      - wepay-net
-
-  kafka:
-    image: confluentinc/cp-kafka:7.9.11
-    container_name: kafka
-    hostname: kafka
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-
-      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
-
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
-
-      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-    networks:
-      - wepay-net
-
-
-
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: kafka-ui
-    ports:
-      - "8080:8080"
-    environment:
-      KAFKA_CLUSTERS_0_NAME: wepay-cluster
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
-    depends_on:
-      - kafka
-    networks:
-      - wepay-net
-
-
-  # ==========================================
-  # 4. MICROSERVICIOS WEPAY
-  # ==========================================
-  ms-usuarios:
+  ms-clientes:
+    <<: *java
     image: joseave/ms-clientes:latest
     container_name: ms-clientes
-    ports:
-      - "8083:8083"
-    networks:
-      - wepay-net
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+      APP_ADMIN_OID: ${APP_ADMIN_OID}
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${CLIENTES_DB_USER}
+      DB_PASSWORD: ${CLIENTES_DB_PASSWORD}
 
   ms-catalogo:
+    <<: *java
     image: joseave/wepay-catalogo:latest
     container_name: ms-catalogo
-    ports:
-      - "8084:8084"
-    networks:
-      - wepay-net
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
 
+  # Productor Kafka (orders.events) y RabbitMQ (ex.pedidos)
   ms-pedidos:
-    image: joseave/wepay-ms-pedidos:latest
+    <<: *java
+    image: joseave/wepay-ms-pedidos:kafka
     container_name: ms-pedidos
     ports:
-      - "8085:8085"
-    depends_on:
-      - oracle-db
-      - rabbitmq
-      - kafka
-    networks:
-      - wepay-net
+      - "127.0.0.1:8085:8085"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      SPRING_RABBITMQ_ADDRESSES: ${RABBIT_ADDRESSES}
+      SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${PEDIDOS_DB_USER}
+      DB_PASSWORD: ${PEDIDOS_DB_PASSWORD}
 
-  ms-auditoria:
-    image: joseave/wepay-ms-auditoria:latest
-    container_name: ms-auditoria
-    ports:
-      - "8086:8086"
-    depends_on:
-      - oracle-db
-      - kafka
-    networks:
-      - wepay-net
-
-  ms-reportes:
-    image: joseave/wepay-ms-reportes:latest
-    container_name: ms-reportes
-    ports:
-      - "8087:8087"
-    depends_on:
-      - oracle-db
-      - kafka
-    networks:
-      - wepay-net
-
+  # Consumidor RabbitMQ (email, sms, facturación)
   ms-notificaciones:
+    <<: *java
     image: joseave/wepay-ms-notificaciones:latest
     container_name: ms-notificaciones
-    depends_on:
-      - rabbitmq
-    networks:
-      - wepay-net
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+      SPRING_RABBITMQ_ADDRESSES: ${RABBIT_ADDRESSES}
+      SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+      APP_FALLA_FACTURACION: ${APP_FALLA_FACTURACION:-false}
+
+  # Consumidor Kafka (orders.events) y productor (audit.timeline + DLT)
+  ms-auditoria:
+    <<: *java
+    image: joseave/wepay-ms-auditoria:latest
+    container_name: ms-auditoria
+    mem_limit: 640m
+    ports:
+      - "127.0.0.1:8086:8086"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx384m"
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${AUDITORIA_DB_USER}
+      DB_PASSWORD: ${AUDITORIA_DB_PASSWORD}
+
+  # Consumidor Kafka (orders.events) + DLT
+  ms-reportes:
+    <<: *java
+    image: joseave/wepay-ms-reportes:latest
+    container_name: ms-reportes
+    mem_limit: 640m
+    ports:
+      - "127.0.0.1:8087:8087"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx384m"
+      SPRING_PROFILES_ACTIVE: prod
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${REPORTES_DB_USER}
+      DB_PASSWORD: ${REPORTES_DB_PASSWORD}
 
   api-bff:
+    <<: *java
     image: joseave/wepay-bff:latest
     container_name: api-bff
     ports:
       - "8081:8081"
     environment:
-      - ENTRA_ISSUER_URI=${ENTRA_ISSUER_URI}
-      - ENTRA_API_CLIENT_ID=${ENTRA_API_CLIENT_ID}
-      - JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
-      - MS_USUARIOS_URL=http://ms-clientes:8083
-      - MS_PRODUCTOS_URL=http://ms-catalogo:8084
-      - MS_PEDIDOS_URL=http://ms-pedidos:8085
-      - MS_AUDITORIA_URL=http://ms-auditoria:8086
-      - MS_REPORTES_URL=http://ms-reportes:8087
-    depends_on:
-      - ms-usuarios
-      - ms-catalogo
-      - ms-pedidos
-      - ms-auditoria
-      - ms-reportes
-    networks:
-      - wepay-net
+      JAVA_TOOL_OPTIONS: "-Xmx320m -Djava.net.preferIPv4Stack=true"
+      ENTRA_ISSUER_URI: ${ENTRA_ISSUER_URI}
+      ENTRA_API_CLIENT_ID: ${ENTRA_API_CLIENT_ID}
+      MS_USUARIOS_URL: http://ms-clientes:8083
+      MS_PRODUCTOS_URL: http://ms-catalogo:8084
+      MS_PEDIDOS_URL: http://ms-pedidos:8085
+      MS_AUDITORIA_URL: http://ms-auditoria:8086
+      MS_REPORTES_URL: http://ms-reportes:8087
+    depends_on: [ms-clientes, ms-catalogo, ms-pedidos, ms-auditoria, ms-reportes]
 
-# ==========================================
-# RED PERSONALIZADA
-# ==========================================
 networks:
   wepay-net:
-    driver: bridge
+    name: wepay-net

@@ -1,0 +1,31 @@
+# ============================================================
+# Kafka UI (requisito: administrar brokers y tópicos desde una interfaz web)
+# Permite crear, modificar y eliminar tópicos, ver mensajes y grupos de consumidores.
+#
+# Uso: docker compose -f docker-compose.kafka-ui.yml up -d
+#      (con el clúster Kafka ya levantado: comparten la red wepay-net)
+# Entrar: http://<host>:${KAFKA_UI_PORT}  usuario admin / KAFKA_UI_PASSWORD
+#
+# Protección: pide usuario y contraseña. En AWS solo se levanta para la demo.
+# ============================================================
+
+services:
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_UI_PORT:-8080}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: wepay
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092,kafka2:29092,kafka3:29092
+      AUTH_TYPE: LOGIN_FORM
+      SPRING_SECURITY_USER_NAME: admin
+      SPRING_SECURITY_USER_PASSWORD: ${KAFKA_UI_PASSWORD:?Define KAFKA_UI_PASSWORD en .env}
+      JAVA_OPTS: "-Xmx256m"
+    mem_limit: 512m
+    networks: [wepay-net]
+
+networks:
+  wepay-net:
+    name: wepay-net

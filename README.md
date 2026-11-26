@@ -1,101 +1,94 @@
+# WePay - Orquestador
 
+Configuración de infraestructura de WePay: **la misma que corre en AWS**. Cada requisito de infraestructura
+tiene su propio archivo `docker-compose`, y todos comparten la red Docker `wepay-net`.
 
-# WePay - Orquestador de Microservicios 🚀
+| Archivo | Qué levanta | Requisito |
+|---|---|---|
+| `docker-compose.rabbitmq-cluster.yml` | 2 nodos RabbitMQ en clúster | Clúster de RabbitMQ |
+| `docker-compose.kafka-cluster.yml` | 1 Zookeeper + 3 brokers Kafka (replicación 3) | Kafka con Zookeeper y brokers |
+| `docker-compose.kafka-ui.yml` | Kafka UI con inicio de sesión | Administrar brokers y tópicos |
+| `docker-compose.yml` | Microservicios (BFF, clientes, catálogo, pedidos, notificaciones, auditoría, reportes) | Productores y consumidores Kafka |
 
-Este repositorio central funciona como el **orquestador de infraestructura** para el sistema WePay. Contiene la configuración de despliegue mediante Docker Compose para levantar todos los microservicios backend de forma simultánea e interconectada en un entorno de desarrollo local.
+## Arquitectura en AWS
 
-## 🏗️ Arquitectura del Sistema
+```
+                    API Gateway (JWT Entra ID)
+                             │
+ ec2-microservicios ─────────┼──────────────────────────────────────────┐
+ │  api-bff ─► ms-clientes, ms-catalogo, ms-pedidos, ms-auditoria, ms-reportes
+ │  ms-pedidos ──► Kafka: orders.events ──► ms-auditoria ──► audit.timeline
+ │                                      └─► ms-reportes
+ │  Kafka: zookeeper + kafka, kafka2, kafka3   │  Kafka UI (solo para la demo)
+ └──────────────────────────────────────────────────────────────────────┘
+ ec2-rabbitmq:  rabbitmq + rabbitmq2  ◄── ms-pedidos (publica) / ms-notificaciones (consume)
+ Amazon RDS Oracle: un esquema por microservicio (clientes, pedidos, auditoria, reportes)
+```
 
-El ecosistema está compuesto por los siguientes servicios, gestionados mediante Submódulos de Git:
+## Contenido del repositorio
 
-- **BFF (Backend for Frontend):** Puerta de entrada principal. Orquesta llamadas, valida tokens de Entra ID y evalúa roles (Puerto 8081).
-- **MS Usuarios:** Gestiona la información de perfil y asignación de roles (Puerto 8083).
-- **MS Catálogo:** Gestiona la lista de productos disponibles para compra (Puerto 8084).
-- **MS Pedidos:** Gestiona el cálculo, creación y lectura del historial de compras (Puerto 8085).
+```
+docker-compose.rabbitmq-cluster.yml   clúster RabbitMQ (2 nodos)
+docker-compose.kafka-cluster.yml      Zookeeper + 3 brokers Kafka
+docker-compose.kafka-ui.yml           Kafka UI
+docker-compose.yml                    microservicios
+rabbitmq/                             configuración del clúster y script de colas
+kafka/crear-topicos.sh                tópicos con 3 réplicas
+.env.example                          variables necesarias (sin valores reales)
+```
 
-*Nota: La arquitectura está diseñada sin dependencias de localhost directo entre servicios. Los servicios se comunican a través de la red interna de Docker usando los nombres de los contenedores.*
+El código de cada microservicio está en su propio repositorio de la organización
+[WePayCloudNative](https://github.com/WePayCloudNative); aquí se usan sus imágenes de Docker Hub (`joseave/*`).
 
----
+## Cómo levantarlo
 
-## ⚙️ Requisitos Previos
+1. Copia `.env.example` como `.env` y completa los valores (el `.env` no se sube a git).
+2. **RabbitMQ** (en `ec2-rabbitmq`):
+   ```bash
+   docker compose -f docker-compose.rabbitmq-cluster.yml up -d
+   RABBIT_USER=... RABBIT_PASS=... ./rabbitmq/crear-colas.sh
+   ```
+3. **Kafka** (en `ec2-microservicios`):
+   ```bash
+   docker compose -f docker-compose.kafka-cluster.yml up -d
+   ./kafka/crear-topicos.sh
+   ```
+4. **Microservicios**:
+   ```bash
+   docker compose up -d
+   ```
+5. **Kafka UI** (solo cuando se necesita):
+   ```bash
+   docker compose -f docker-compose.kafka-ui.yml up -d     # levantar
+   docker compose -f docker-compose.kafka-ui.yml stop      # apagar
+   ```
 
-Para ejecutar este proyecto en tu máquina local, necesitas tener instalado:
-1. [Git](https://git-scm.com/)
-2. [Docker Desktop](https://www.docker.com/products/docker-desktop/) (o Docker Engine + Docker Compose)
-3. Credenciales válidas de Microsoft Entra ID (Tenant ID y Client ID).
+> Para probar todo en un solo PC: usar `RABBIT_ADDRESSES=rabbitmq:5672,rabbitmq2:5672` y
+> levantar los cuatro archivos en la misma máquina. Oracle sigue siendo el de RDS.
 
----
-
-## 🚀 Guía de Instalación y Ejecución
-
-Sigue estos pasos exactos para descargar el código fuente y levantar la arquitectura completa.
-
-### 1. Clonar el repositorio
-Dado que este proyecto utiliza submódulos de Git, debes clonarlo de forma recursiva para descargar también el código de las carpetas internas de cada microservicio:
+## Comprobaciones útiles
 
 ```bash
-git clone --recurse-submodules https://github.com/racoonius-programmer/wepay-orquestador.git
-cd wepay-orquestador
+# Brokers registrados (esperado: [1, 2, 3])
+docker exec kafka zookeeper-shell zookeeper:2181 ls /brokers/ids
 
+# Réplicas y líder de cada partición
+docker exec kafka kafka-topics --bootstrap-server kafka:29092 --describe --topic orders.events
+
+# Lag de los consumidores (0 = al día)
+docker exec kafka kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group wepay-reportes-group
+
+# Nodos del clúster RabbitMQ
+docker exec rabbitmq rabbitmqctl cluster_status
 ```
 
-*(Si ya clonaste el proyecto sin el flag recursivo, puedes descargar el contenido de los submódulos ejecutando `git submodule update --init --recursive`)*.
+## Decisiones
 
-### 2. Configurar Variables de Entorno (.env)
-
-El BFF requiere variables de configuración para validar la autenticación. En la **raíz del proyecto** (donde se encuentra el `docker-compose.yml`), crea un archivo llamado `.env` e ingresa los valores correspondientes al entorno de desarrollo:
-
-```env
-ENTRA_ISSUER_URI=[https://login.microsoftonline.com/](https://login.microsoftonline.com/)<TU_TENANT_ID_AQUI>/v2.0
-ENTRA_API_CLIENT_ID=<TU_CLIENT_ID_AQUI>
-
-VITE_ENTRA_TENANT_ID=...
-VITE_SPA_CLIENT_ID=...
-VITE_API_CLIENT_ID=...
-VITE_BFF_BASE_URL=http://localhost:8081 (puerto por defecto)
-
-```
-
-### 3. Levantar los Contenedores
-
-Abre tu terminal en la raíz del proyecto y ejecuta el siguiente comando. Docker se encargará de descargar la imagen desde Docker Hub, descargar los archivos y ejecutarlos en los puertos establecidos.
-- Front: Puerto 5173
-- BFF: 8081
-- MS-Clientes: 8083
-- MS-Catalogo: 8084
-- MS-Pedidos: 8085
-(Mismos puertos se usan en Docker)
-
-```bash
-docker compose pull
-docker compose up --d
-
-```
-
-**¡Listo!** El sistema estará operativo en unos segundos. Podrás ver los logs unificados de los 4 servicios en tu terminal.
-
----
-
-## 🧪 Cómo Probar el Entorno
-
-Entra al Front mediante localhost (5173 es el puerto por defecto)  
-```bash
-http://localhost:5173/
-```
-Todas las llamadas hacia el backend desde el cliente (Frontend/Postman/cURL) deben dirigirse exclusivamente al puerto del BFF (**8081**).
-
-Asegúrate de generar un token JWT válido de usuario desde la plataforma de Microsoft Entra y utiliza ese token como `Bearer Auth`.
-
-**Ejemplo de prueba de integridad (Obtener historial de pedidos):**
-(Solo funciona si el Front corre en local)
-
-```bash
-curl -i http://localhost:8081/api/pedidos \
-  -H "Authorization: Bearer <TU_TOKEN_JWT>"
-
-```
-
----
-
-## 🛠️ Notas de Desarrollo
-* **Detener los servicios:** Para apagar el ecosistema de forma limpia y liberar los puertos, presiona `Ctrl + C` en la terminal donde se ejecutan los logs, o ejecuta `docker compose down` en una terminal paralela.
+- **Replicación 3 y `min.insync.replicas=2`:** cada mensaje queda en los 3 brokers y se confirma
+  con al menos 2. Si cae un broker la tienda sigue funcionando; con 2 caídos Kafka rechaza
+  escrituras para no arriesgar perder datos.
+- **Sin puertos de Kafka publicados:** solo los microservicios (en la red Docker) lo alcanzan.
+- **Puertos de auditoría, reportes y pedidos en `127.0.0.1`:** no son accesibles desde internet,
+  solo a través del BFF.
+- **Kafka UI con inicio de sesión** y levantada solo para la demo.
+- **Contraseñas solo en `.env`**, nunca en los archivos del repo.
