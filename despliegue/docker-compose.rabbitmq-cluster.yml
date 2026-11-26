@@ -1,0 +1,58 @@
+# ============================================================
+# Clúster RabbitMQ: 2 nodos (requisito: clúster de RabbitMQ)
+# En AWS corre en la EC2 "ec2-rabbitmq".
+#
+# Uso:   docker compose -f docker-compose.rabbitmq-cluster.yml up -d
+# Luego: RABBIT_USER=... RABBIT_PASS=... ../rabbitmq/crear-colas.sh
+#
+# Los dos nodos se unen solos al arrancar (../rabbitmq/rabbitmq.conf) porque
+# comparten la misma RABBIT_COOKIE.
+# ============================================================
+
+x-rabbit: &rabbit
+  image: rabbitmq:3.13-management
+  restart: unless-stopped
+  mem_limit: 1g
+  environment:
+    RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+    RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+    RABBITMQ_ERLANG_COOKIE: ${RABBIT_COOKIE}
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+  networks: [wepay-net]
+
+services:
+  rabbitmq:
+    <<: *rabbit
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"     # AMQP nodo 1
+      - "15672:15672"   # panel web nodo 1
+    volumes:
+      - rabbit_data:/var/lib/rabbitmq
+      - ../rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+
+  rabbitmq2:
+    <<: *rabbit
+    container_name: rabbitmq2
+    hostname: rabbitmq2
+    ports:
+      - "5673:5672"     # AMQP nodo 2
+      - "15673:15672"   # panel web nodo 2
+    volumes:
+      - rabbit2_data:/var/lib/rabbitmq
+      - ../rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+
+volumes:
+  rabbit_data:
+  rabbit2_data:
+
+networks:
+  wepay-net:
+    name: wepay-net

@@ -1,0 +1,117 @@
+# ============================================================
+# Microservicios WePay, tal como corren en la EC2 "ec2-microservicios".
+# Requiere el clúster Kafka (docker-compose.kafka-cluster.yml) en la misma red,
+# el clúster RabbitMQ (RABBIT_ADDRESSES) y Oracle en RDS (ORACLE_URL).
+#
+# Uso: docker compose up -d
+#
+# Solo el BFF publica un puerto (8081, para API Gateway). El resto escucha en la
+# red Docker o en 127.0.0.1 (solo desde la misma máquina, para pruebas con curl).
+# ============================================================
+
+x-java: &java
+  restart: unless-stopped
+  mem_limit: 512m
+  networks: [wepay-net]
+
+x-kafka: &kafka-bootstrap kafka:29092,kafka2:29092,kafka3:29092
+
+services:
+  ms-clientes:
+    <<: *java
+    image: joseave/ms-clientes:latest
+    container_name: ms-clientes
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+      APP_ADMIN_OID: ${APP_ADMIN_OID}
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${CLIENTES_DB_USER}
+      DB_PASSWORD: ${CLIENTES_DB_PASSWORD}
+
+  ms-catalogo:
+    <<: *java
+    image: joseave/wepay-catalogo:latest
+    container_name: ms-catalogo
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+
+  # Productor Kafka (orders.events) y RabbitMQ (ex.pedidos)
+  ms-pedidos:
+    <<: *java
+    image: joseave/wepay-ms-pedidos:kafka
+    container_name: ms-pedidos
+    ports:
+      - "127.0.0.1:8085:8085"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m"
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      SPRING_RABBITMQ_ADDRESSES: ${RABBIT_ADDRESSES}
+      SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${PEDIDOS_DB_USER}
+      DB_PASSWORD: ${PEDIDOS_DB_PASSWORD}
+
+  # Consumidor RabbitMQ (email, sms, facturación)
+  ms-notificaciones:
+    <<: *java
+    image: joseave/wepay-ms-notificaciones:latest
+    container_name: ms-notificaciones
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx256m"
+      SPRING_RABBITMQ_ADDRESSES: ${RABBIT_ADDRESSES}
+      SPRING_RABBITMQ_USERNAME: ${RABBIT_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBIT_PASS}
+      APP_FALLA_FACTURACION: ${APP_FALLA_FACTURACION:-false}
+
+  # Consumidor Kafka (orders.events) y productor (audit.timeline + DLT)
+  ms-auditoria:
+    <<: *java
+    image: joseave/wepay-ms-auditoria:latest
+    container_name: ms-auditoria
+    mem_limit: 640m
+    ports:
+      - "127.0.0.1:8086:8086"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx384m"
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${AUDITORIA_DB_USER}
+      DB_PASSWORD: ${AUDITORIA_DB_PASSWORD}
+
+  # Consumidor Kafka (orders.events) + DLT
+  ms-reportes:
+    <<: *java
+    image: joseave/wepay-ms-reportes:latest
+    container_name: ms-reportes
+    mem_limit: 640m
+    ports:
+      - "127.0.0.1:8087:8087"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx384m"
+      SPRING_PROFILES_ACTIVE: prod
+      KAFKA_BOOTSTRAP_SERVERS: *kafka-bootstrap
+      DB_URL: ${ORACLE_URL}
+      DB_USER: ${REPORTES_DB_USER}
+      DB_PASSWORD: ${REPORTES_DB_PASSWORD}
+
+  api-bff:
+    <<: *java
+    image: joseave/wepay-bff:latest
+    container_name: api-bff
+    ports:
+      - "8081:8081"
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx320m -Djava.net.preferIPv4Stack=true"
+      ENTRA_ISSUER_URI: ${ENTRA_ISSUER_URI}
+      ENTRA_API_CLIENT_ID: ${ENTRA_API_CLIENT_ID}
+      MS_USUARIOS_URL: http://ms-clientes:8083
+      MS_PRODUCTOS_URL: http://ms-catalogo:8084
+      MS_PEDIDOS_URL: http://ms-pedidos:8085
+      MS_AUDITORIA_URL: http://ms-auditoria:8086
+      MS_REPORTES_URL: http://ms-reportes:8087
+    depends_on: [ms-clientes, ms-catalogo, ms-pedidos, ms-auditoria, ms-reportes]
+
+networks:
+  wepay-net:
+    name: wepay-net

@@ -4,6 +4,10 @@
 
 Este repositorio central funciona como el **orquestador de infraestructura** para el sistema WePay. Contiene la configuración de despliegue mediante Docker Compose para levantar todos los microservicios backend de forma simultánea e interconectada en un entorno de desarrollo local.
 
+> **Despliegue en AWS:** la configuración que corre en producción (clúster RabbitMQ de 2 nodos,
+> clúster Kafka de 3 brokers, Kafka UI, Oracle en RDS) está en [`despliegue/`](despliegue/README.md).
+> Los archivos de esta raíz son para desarrollo local.
+
 ## 🏗️ Arquitectura del Sistema
 
 El ecosistema está compuesto por los siguientes servicios, gestionados mediante Submódulos de Git:
