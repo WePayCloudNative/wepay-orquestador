@@ -3,9 +3,9 @@
 # En AWS corre en la EC2 "ec2-rabbitmq".
 #
 # Uso:   docker compose -f docker-compose.rabbitmq-cluster.yml up -d
-# Luego: RABBIT_USER=... RABBIT_PASS=... ../rabbitmq/crear-colas.sh
+# Luego: RABBIT_USER=... RABBIT_PASS=... ./rabbitmq/crear-colas.sh
 #
-# Los dos nodos se unen solos al arrancar (../rabbitmq/rabbitmq.conf) porque
+# Los dos nodos se unen solos al arrancar (./rabbitmq/rabbitmq.conf) porque
 # comparten la misma RABBIT_COOKIE.
 # ============================================================
 
@@ -34,8 +34,8 @@ services:
       - "15672:15672"   # panel web nodo 1
     volumes:
       - rabbit_data:/var/lib/rabbitmq
-      - ../rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
-      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
 
   rabbitmq2:
     <<: *rabbit
@@ -46,8 +46,8 @@ services:
       - "15673:15672"   # panel web nodo 2
     volumes:
       - rabbit2_data:/var/lib/rabbitmq
-      - ../rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
-      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
 
 volumes:
   rabbit_data:
