@@ -33,7 +33,8 @@ docker-compose.kafka-cluster.yml      Zookeeper + 3 brokers Kafka
 docker-compose.kafka-ui.yml           Kafka UI
 docker-compose.yml                    microservicios
 rabbitmq/                             configuración del clúster y script de colas
-kafka/crear-topicos.sh                tópicos con 3 réplicas
+kafka/crear-topicos.sh                tópicos con 3 réplicas, retención y cleanup por flujo
+kafka/admin.sh                        administración: tópicos, configuración y consumer groups
 .env.example                          variables necesarias (sin valores reales)
 ```
 
@@ -65,6 +66,35 @@ El código de cada microservicio está en su propio repositorio de la organizaci
 
 > Para probar todo en un solo PC: usar `RABBIT_ADDRESSES=rabbitmq:5672,rabbitmq2:5672` y
 > levantar los cuatro archivos en la misma máquina. Oracle sigue siendo el de RDS.
+
+## Tópicos y su configuración
+
+| Tópico | Particiones | Réplicas | Retención | Cleanup | Flujo |
+|---|---|---|---|---|---|
+| `orders.events` | 3 | 3 | 7 días | delete | ms-pedidos → ms-auditoria y ms-reportes |
+| `audit.timeline` | 3 | 3 | 30 días | delete | ms-auditoria publica cada evento registrado |
+| `orders.events.DLT` | 1 | 3 | 30 días | delete | eventos que ms-reportes no pudo procesar |
+| `orders.events.auditoria.DLT` | 1 | 3 | 30 días | delete | eventos que ms-auditoria no pudo procesar |
+
+Todos con `min.insync.replicas=2`. Los eventos duran 7 días porque auditoría y reportes ya los guardan
+en Oracle; las DLT y la traza de auditoría duran 30 para dar tiempo a investigar.
+
+## Administrar Kafka
+
+```bash
+./kafka/admin.sh brokers                                   # brokers del clúster
+./kafka/admin.sh topicos                                   # tópicos
+./kafka/admin.sh describir orders.events                   # particiones, líderes, réplicas y config
+./kafka/admin.sh crear prueba 3 3                          # crear
+./kafka/admin.sh config prueba retention.ms=3600000        # cambiar configuración
+./kafka/admin.sh particiones prueba 6                      # aumentar particiones
+./kafka/admin.sh borrar prueba                             # eliminar (pide confirmación)
+./kafka/admin.sh grupos                                    # consumer groups
+./kafka/admin.sh grupo wepay-reportes-group                # offsets, lag y miembros
+./kafka/admin.sh reset wepay-reportes-group orders.events earliest   # reprocesar (simulación)
+```
+
+Lo mismo se puede hacer desde la Kafka UI.
 
 ## Comprobaciones útiles
 
